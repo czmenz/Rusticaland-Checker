@@ -4,6 +4,10 @@ import SteamDetection from './components/SteamDetection';
 import PCSecurityCheck from './components/PCSecurityCheck';
 import SuspiciousFilesCheck from './components/SuspiciousFilesCheck';
 
+// Server configuration
+const SERVER_URL = 'http://89.203.249.22:4000';
+const BOT_API_TOKEN = 'MTMxNTEwMDEwMjIxMzM2OTk0Ng.Gbb0oV.cTSIIg9tPtGZ8ZD6N2emcu-aLL0HFHjATCp2I8';
+
 const AppContainer = styled.div`
   height: 100vh;
   width: 100vw;
@@ -298,23 +302,189 @@ function App() {
   const [loadingText, setLoadingText] = useState('Initializing application...');
   const [progress, setProgress] = useState(0);
   const [detectionResults, setDetectionResults] = useState(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [initError, setInitError] = useState('');
+  const [serverConnected, setServerConnected] = useState(false);
+  const [appVersion] = useState('b1.0.0');
+  const [userInfo, setUserInfo] = useState(null);
+  
 
-  // Staff authentication keys
-  const validKeys = {
-    'b7g3z8x4a1t9n2r6m0q5e7c1d8h9y4k3p2u5j0s6v1l9w8f3o7i2': 'Wakka',
-    'x2d9s4k1a8l0q6m7f3z5p2h9c8j1r4e0u7t6g5b3y9v2n8o1w4i7': 'Nemesis',
-    'n4r2p9q8k7x1d5a0g6j4m2c9f3y8v5s0t1h7l6e9b4w3i2o5u8z7': 'Error',
-    'f1c8y3l6r9m0d4t2a5g7s9v8j1p6e2b4k0q7x3n5w9i8o1u2h4z6': 'Death'
+
+
+
+  // Function to verify server version
+  const verifyServerVersion = async () => {
+    try {
+      setLoadingText('Connecting to server...');
+      console.log(`Connecting to server: ${SERVER_URL}`);
+      
+      const response = await fetch(`${SERVER_URL}/api/version`);
+      
+      if (!response.ok) {
+        throw new Error(`Server responded with error: ${response.status}`);
+      }
+      
+      setLoadingText('Verifying server version...');
+      const data = await response.json();
+      console.log(`Server version: ${data.version}, App version: ${appVersion}`);
+      
+      if (data.version !== appVersion) {
+        throw new Error(`Incompatible version. Server: ${data.version}, Application: ${appVersion}`);
+      }
+      
+      setLoadingText('Server connection successful!');
+      console.log('Server connection successful');
+      setServerConnected(true);
+      return true;
+    } catch (error) {
+      console.error('Server verification failed:', error);
+      setInitError(`Connection error: ${error.message}`);
+      return false;
+    }
   };
 
-  const handleAuth = () => {
-    if (validKeys[authKey]) {
+  // Function to redeem a code
+  const redeemCode = async (code) => {
+    try {
+      console.log(`Redeeming code: ${code}`);
+      
+      const response = await fetch(`${SERVER_URL}/api/codes/redeem`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ code: code })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to redeem code: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Code redeemed successfully:', data);
+      return data;
+    } catch (error) {
+      console.error('Code redemption failed:', error);
+      throw error;
+    }
+  };
+
+  // Function to send PC Check in Progress embed
+  const sendPCCheckProgressEmbed = async (code) => {
+    try {
+      console.log(`Sending PC Check in Progress embed for code: ${code}`);
+      
+      const embedData = {
+        content: null,
+        embeds: [
+          {
+            title: "🧠 PC Check in Progress",
+            description: "**Status:** Connected to user's system.\n**Action:** Performing active PC scan and data collection...\n\n> 🧩 Please wait while system information, security modules, and suspicious files are being analyzed.",
+            color: 3447003,
+            footer: {
+              text: "Rusticaland • PC Check System",
+              icon_url: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQwPGwkEwy2mzrO5m9hex7qrrZwiUoc283XIw&s"
+            },
+            timestamp: new Date().toISOString()
+          }
+        ],
+        attachments: []
+      };
+      
+      const response = await fetch(`${SERVER_URL}/api/webhook/progress`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code: code,
+          embedData: embedData
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to send progress embed: ${response.status}`);
+      }
+      
+      console.log('PC Check in Progress embed sent successfully');
+    } catch (error) {
+      console.error('Failed to send progress embed:', error);
+      // Don't throw error here as it's not critical for authentication
+    }
+  };
+
+  // Function to check if code is active
+  const checkCodeStatus = async (code) => {
+    try {
+      setLoadingText('Verifying code validity...');
+      console.log(`Checking code status for: ${code}`);
+      
+      const response = await fetch(`${SERVER_URL}/api/codes/${encodeURIComponent(code)}/active`);
+      
+      if (!response.ok) {
+        throw new Error(`Server responded with error: ${response.status}`);
+      }
+      
+      setLoadingText('Processing server response...');
+      const data = await response.json();
+      console.log(`Code status response:`, data);
+      
+      if (data.active === true) {
+        setLoadingText('Code is valid!');
+        console.log(`Code is active, remaining time: ${data.remainingMs}ms`);
+      } else {
+        setLoadingText('Code is not valid');
+        console.log('Code is not active');
+      }
+      
+      return data.active === true;
+    } catch (error) {
+      console.error('Code verification failed:', error);
+      setAuthError('Failed to verify code. Please try again.');
+      return false;
+    }
+  };
+
+  const handleAuth = async () => {
+    if (!serverConnected) {
+      setAuthError('Server is not connected. Please restart the application.');
+      return;
+    }
+
+    setAuthError('');
+    setIsLoading(true);
+    setLoadingText('Starting verification...');
+    console.log('Starting authentication process');
+
+    try {
+      // Check if code is active on server
+      setLoadingText('Checking code activity on server...');
+      const isCodeActive = await checkCodeStatus(authKey);
+      
+      if (!isCodeActive) {
+        setAuthError('Code is not active or does not exist.');
+        setIsLoading(false);
+        return;
+      }
+
+      // If code is active, redeem the code and authenticate user
+      setLoadingText('Activating code...');
+      console.log(`Code ${authKey} is active - redeeming and authenticating user`);
+      
+      // Redeem the code and store user info
+      const redemptionData = await redeemCode(authKey);
+      setUserInfo(redemptionData);
+      
+      // Send PC Check in Progress embed
+      await sendPCCheckProgressEmbed(authKey);
+      
+      setLoadingText('Logging in...');
       setIsAuthenticated(true);
       setAuthError('');
-      setIsLoading(true);
-      console.log(`Authenticated as: ${validKeys[authKey]}`);
-    } else {
-      setAuthError('');
+    } catch (error) {
+      console.error('Authentication error:', error);
+      setAuthError('Authentication failed. Please try again.');
+      setIsLoading(false);
     }
   };
 
@@ -331,7 +501,7 @@ function App() {
       const cleanupTime = await window.electronAPI.getRecycleBinCleanupTime();
       if (cleanupTime) {
         const date = new Date(cleanupTime);
-        return date.toLocaleDateString('cs-CZ') + ' ' + date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleDateString('en-US') + ' ' + date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       }
     } catch (error) {
       console.error('Error getting cleanup time:', error);
@@ -339,7 +509,7 @@ function App() {
     
     // Fallback to checking if recycle bin has files
     if (!recycleFilesData || !recycleFilesData.recycleFiles || recycleFilesData.recycleFiles.length === 0) {
-      return 'Koš je prázdný - datum vymazání není k dispozici';
+      return 'Recycle bin is empty - deletion date not available';
     }
     
     // Find the most recent deletion time
@@ -347,7 +517,7 @@ function App() {
       .map(file => new Date(file.deleted))
       .sort((a, b) => b - a)[0];
     
-    return mostRecentDeletion.toLocaleDateString('cs-CZ') + ' ' + mostRecentDeletion.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+    return mostRecentDeletion.toLocaleDateString('en-US') + ' ' + mostRecentDeletion.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   };
 
   // Helper function to detect specific cheats based on file size
@@ -466,7 +636,716 @@ function App() {
     return Math.min(percentage, 95); // Cap at 95% for non-hardcoded cases
   };
 
-  // Function to create Discord webhook data based on detection results
+  // Function to send data to bot instead of webhook
+  const sendDataToBot = async (detectionData, pcSecurityData, suspiciousFilesData, recycleFilesData, registryData, computerName, checkedBy) => {
+    try {
+      await window.electronAPI?.writeLog('Starting sendDataToBot function...');
+      
+      const timestamp = new Date().toISOString();
+      const cheatPercentage = calculateCheatPercentage(detectionData, suspiciousFilesData);
+      const ticketId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      await window.electronAPI?.writeLog(`Generated ticket ID: ${ticketId}`);
+      
+      // Prepare main data (without files)
+      const mainData = {
+        type: 'pc_check_files',
+        ticketId,
+        computerName,
+        checkedBy,
+        authKey,
+        timestamp,
+        cheatPercentage,
+        detectionResults: detectionData,
+        pcSecurityData: pcSecurityData
+      };
+      
+      // Create file contents
+      const dataContent = JSON.stringify(mainData, null, 2);
+      const suspiciousFilesContent = JSON.stringify(suspiciousFilesData, null, 2);
+      const recycleFilesContent = JSON.stringify(recycleFilesData, null, 2);
+      
+      await window.electronAPI?.writeLog('Uploading files to server...');
+      
+      // Upload main data file
+      const dataFormData = new FormData();
+      dataFormData.append('file', new Blob([dataContent], { type: 'application/json' }), `data_${ticketId}.txt`);
+      dataFormData.append('ticketId', ticketId);
+      dataFormData.append('fileType', 'data');
+      
+      const dataResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+        method: 'POST',
+        body: dataFormData
+      });
+      
+      if (!dataResponse.ok) {
+        throw new Error(`Failed to upload data file: ${dataResponse.status}`);
+      }
+      
+      // Upload suspicious files
+      const suspiciousFormData = new FormData();
+      suspiciousFormData.append('file', new Blob([suspiciousFilesContent], { type: 'application/json' }), `suspicious-files_${ticketId}.txt`);
+      suspiciousFormData.append('ticketId', ticketId);
+      suspiciousFormData.append('fileType', 'suspicious-files');
+      
+      const suspiciousResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+        method: 'POST',
+        body: suspiciousFormData
+      });
+      
+      if (!suspiciousResponse.ok) {
+        throw new Error(`Failed to upload suspicious files: ${suspiciousResponse.status}`);
+      }
+      
+      // Upload recycle bin files
+      const recycleFormData = new FormData();
+      recycleFormData.append('file', new Blob([recycleFilesContent], { type: 'application/json' }), `recycle-bin_${ticketId}.txt`);
+      recycleFormData.append('ticketId', ticketId);
+      recycleFormData.append('fileType', 'recycle-bin');
+      
+      const recycleResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+        method: 'POST',
+        body: recycleFormData
+      });
+      
+      if (!recycleResponse.ok) {
+        throw new Error(`Failed to upload recycle bin files: ${recycleResponse.status}`);
+      }
+      
+      // Upload registry dumps
+      if (registryData) {
+        // Upload Compatibility Assistant Store
+        if (registryData.compatibilityAssistant) {
+          const compatFormData = new FormData();
+          // Format array data properly - each item on new line
+          const compatContent = Array.isArray(registryData.compatibilityAssistant) 
+            ? registryData.compatibilityAssistant.join('\n')
+            : registryData.compatibilityAssistant;
+          compatFormData.append('file', new Blob([compatContent], { type: 'text/plain' }), `compatibility-assistant_${ticketId}.txt`);
+          compatFormData.append('ticketId', ticketId);
+          compatFormData.append('fileType', 'compatibility-assistant');
+          
+          const compatResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+            method: 'POST',
+            body: compatFormData
+          });
+          
+          if (!compatResponse.ok) {
+            throw new Error(`Failed to upload compatibility assistant file: ${compatResponse.status}`);
+          }
+        }
+        
+        // Upload AppSwitched
+        if (registryData.appSwitched) {
+          const appSwitchedFormData = new FormData();
+          // Format array data properly - each item on new line
+          const appSwitchedContent = Array.isArray(registryData.appSwitched) 
+            ? registryData.appSwitched.join('\n')
+            : registryData.appSwitched;
+          appSwitchedFormData.append('file', new Blob([appSwitchedContent], { type: 'text/plain' }), `app-switched_${ticketId}.txt`);
+          appSwitchedFormData.append('ticketId', ticketId);
+          appSwitchedFormData.append('fileType', 'app-switched');
+          
+          const appSwitchedResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+            method: 'POST',
+            body: appSwitchedFormData
+          });
+          
+          if (!appSwitchedResponse.ok) {
+            throw new Error(`Failed to upload app switched file: ${appSwitchedResponse.status}`);
+          }
+        }
+        
+        // Upload MuiCache
+        if (registryData.muiCache) {
+          const muiCacheFormData = new FormData();
+          // Format array data properly - extract name from objects and put each on new line
+          let muiCacheContent;
+          if (Array.isArray(registryData.muiCache)) {
+            muiCacheContent = registryData.muiCache
+              .map(item => {
+                if (typeof item === 'string') {
+                  // Remove .FriendlyAppName suffix if present
+                  return item.replace(/\.FriendlyAppName$/, '');
+                }
+                if (item && typeof item === 'object' && item.name) {
+                  // Remove .FriendlyAppName suffix if present
+                  return item.name.replace(/\.FriendlyAppName$/, '');
+                }
+                return JSON.stringify(item);
+              })
+              .join('\n');
+          } else {
+            muiCacheContent = registryData.muiCache;
+          }
+          muiCacheFormData.append('file', new Blob([muiCacheContent], { type: 'text/plain' }), `mui-cache_${ticketId}.txt`);
+          muiCacheFormData.append('ticketId', ticketId);
+          muiCacheFormData.append('fileType', 'mui-cache');
+          
+          const muiCacheResponse = await fetch(`${SERVER_URL}/api/upload-file`, {
+            method: 'POST',
+            body: muiCacheFormData
+          });
+          
+          if (!muiCacheResponse.ok) {
+            throw new Error(`Failed to upload mui cache file: ${muiCacheResponse.status}`);
+          }
+        }
+      }
+      
+      await window.electronAPI?.writeLog(`All files uploaded successfully for ticket: ${ticketId}`);
+      return true;
+      
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Error uploading files: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Send basic PC check information
+  const sendBasicPCInfo = async (computerName, checkedBy, timestamp, cheatPercentage) => {
+    try {
+      const basicData = {
+        type: 'pc_check_basic',
+        data: {
+          computerName,
+          checkedBy,
+          authKey,
+          timestamp,
+          cheatPercentage
+        }
+      };
+
+      await window.electronAPI?.writeLog(`Sending basic PC info for code: ${authKey}`);
+
+      const response = await fetch(`${SERVER_URL}/api/bot/send-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${BOT_API_TOKEN}`
+        },
+        body: JSON.stringify({ data: basicData })
+      });
+
+      if (response.ok) {
+        await window.electronAPI?.writeLog('Basic PC info sent successfully');
+        return true;
+      } else {
+        const errorText = await response.text();
+        await window.electronAPI?.writeLog(`Basic PC info failed: ${response.status} - ${errorText}`);
+        return false;
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Basic PC info error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Send detection data separately with automatic splitting
+  const sendDetectionData = async (detectionData) => {
+    try {
+      // Check if we need to split the data
+      const testChunk = {
+        type: 'pc_check_detection',
+        data: {
+          authKey,
+          detectionResults: detectionData
+        }
+      };
+
+      const payloadSize = getPayloadSize({ data: testChunk });
+      const maxPayloadSize = 50 * 1024; // 50KB limit (very conservative to ensure chunking works)
+
+      await window.electronAPI?.writeLog(`Detection data payload size: ${payloadSize} bytes`);
+
+      if (payloadSize > maxPayloadSize) {
+        await window.electronAPI?.writeLog('Detection payload too large, splitting detection data...');
+        
+        // Split Steam accounts if there are many
+        if (detectionData.accounts && detectionData.accounts.length > 10) {
+          const accountChunks = splitArrayData(detectionData.accounts, 10);
+          for (let i = 0; i < accountChunks.length; i++) {
+            const chunkData = {
+              ...detectionData,
+              accounts: accountChunks[i],
+              chunkInfo: { part: i + 1, total: accountChunks.length, type: 'accounts' }
+            };
+            
+            const result = await sendSingleDetectionChunk(chunkData, `detection_accounts_${i + 1}`);
+            if (!result) return false;
+          }
+        }
+
+        // Send remaining detection data (without accounts to reduce size)
+        const remainingData = {
+          ...detectionData,
+          accounts: [], // Clear accounts array
+          chunkInfo: { part: 1, total: 1, type: 'remaining' }
+        };
+        
+        return await sendSingleDetectionChunk(remainingData, 'detection_remaining');
+      } else {
+        // Send as single chunk if size is acceptable
+        return await sendSingleDetectionChunk(detectionData, 'detection_single');
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Detection data error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Helper function to send a single detection chunk
+  const sendSingleDetectionChunk = async (detectionData, chunkId) => {
+    try {
+      const detectionChunk = {
+        type: 'pc_check_detection',
+        data: {
+          authKey,
+          detectionResults: detectionData,
+          chunkId
+        }
+      };
+
+      const response = await fetch(`${SERVER_URL}/api/bot/send-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${BOT_API_TOKEN}`
+        },
+        body: JSON.stringify({ data: detectionChunk })
+      });
+
+      if (response.ok) {
+        await window.electronAPI?.writeLog(`Detection chunk ${chunkId} sent successfully`);
+        return true;
+      } else {
+        const errorText = await response.text();
+        await window.electronAPI?.writeLog(`Detection chunk ${chunkId} failed: ${response.status} - ${errorText}`);
+        return false;
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Detection chunk ${chunkId} error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Send PC security data separately with automatic splitting
+  const sendPCSecurityData = async (pcSecurityData) => {
+    try {
+      // Check if we need to split the data
+      const testChunk = {
+        type: 'pc_check_security',
+        data: {
+          authKey,
+          pcSecurity: pcSecurityData
+        }
+      };
+
+      const payloadSize = getPayloadSize({ data: testChunk });
+      const maxPayloadSize = 50 * 1024; // 50KB limit (very conservative to ensure chunking works)
+
+      await window.electronAPI?.writeLog(`PC security data payload size: ${payloadSize} bytes`);
+
+      if (payloadSize > maxPayloadSize) {
+        await window.electronAPI?.writeLog('PC security payload too large, splitting security data...');
+        
+        // More aggressive splitting with smaller chunks
+        const splitSecurityData = { ...pcSecurityData };
+        let chunkCount = 0;
+        
+        // Split firewall rules with smaller chunks
+        if (pcSecurityData.firewallRules && pcSecurityData.firewallRules.length > 5) {
+          const firewallChunks = splitArrayData(pcSecurityData.firewallRules, 5);
+          for (let i = 0; i < firewallChunks.length; i++) {
+            const chunkData = {
+              firewallRules: firewallChunks[i],
+              chunkInfo: { part: i + 1, total: firewallChunks.length, type: 'firewall' }
+            };
+            
+            const result = await sendSingleSecurityChunk(chunkData, `security_firewall_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          splitSecurityData.firewallRules = []; // Clear to reduce size
+        }
+
+        // Split installed security software with smaller chunks
+        if (pcSecurityData.installedSecurity && pcSecurityData.installedSecurity.length > 3) {
+          const securityChunks = splitArrayData(pcSecurityData.installedSecurity, 3);
+          for (let i = 0; i < securityChunks.length; i++) {
+            const chunkData = {
+              installedSecurity: securityChunks[i],
+              chunkInfo: { part: i + 1, total: securityChunks.length, type: 'installed_security' }
+            };
+            
+            const result = await sendSingleSecurityChunk(chunkData, `security_installed_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          splitSecurityData.installedSecurity = []; // Clear to reduce size
+        }
+
+        // Split user accounts if there are many
+        if (pcSecurityData.userAccounts && pcSecurityData.userAccounts.length > 3) {
+          const userChunks = splitArrayData(pcSecurityData.userAccounts, 3);
+          for (let i = 0; i < userChunks.length; i++) {
+            const chunkData = {
+              userAccounts: userChunks[i],
+              chunkInfo: { part: i + 1, total: userChunks.length, type: 'user_accounts' }
+            };
+            
+            const result = await sendSingleSecurityChunk(chunkData, `security_users_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          splitSecurityData.userAccounts = []; // Clear to reduce size
+        }
+
+        // Split registry keys if there are many
+        if (pcSecurityData.registryKeys && pcSecurityData.registryKeys.length > 5) {
+          const registryChunks = splitArrayData(pcSecurityData.registryKeys, 5);
+          for (let i = 0; i < registryChunks.length; i++) {
+            const chunkData = {
+              registryKeys: registryChunks[i],
+              chunkInfo: { part: i + 1, total: registryChunks.length, type: 'registry_keys' }
+            };
+            
+            const result = await sendSingleSecurityChunk(chunkData, `security_registry_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          splitSecurityData.registryKeys = []; // Clear to reduce size
+        }
+
+        // Check if remaining data is still too large
+        const remainingTestChunk = {
+          type: 'pc_check_security',
+          data: {
+            authKey,
+            pcSecurity: splitSecurityData
+          }
+        };
+        
+        const remainingSize = getPayloadSize({ data: remainingTestChunk });
+        await window.electronAPI?.writeLog(`Remaining security data size: ${remainingSize} bytes`);
+        
+        if (remainingSize > maxPayloadSize) {
+          // Split remaining data into smaller pieces
+          const remainingKeys = Object.keys(splitSecurityData);
+          const keyChunks = splitArrayData(remainingKeys, 2); // Split into chunks of 2 keys each
+          
+          for (let i = 0; i < keyChunks.length; i++) {
+            const chunkData = {};
+            keyChunks[i].forEach(key => {
+              if (splitSecurityData[key] !== undefined) {
+                chunkData[key] = splitSecurityData[key];
+              }
+            });
+            chunkData.chunkInfo = { part: i + 1, total: keyChunks.length, type: 'remaining_split' };
+            
+            const result = await sendSingleSecurityChunk(chunkData, `security_remaining_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+        } else {
+          // Send remaining security data
+          if (Object.keys(splitSecurityData).length > 0) {
+            splitSecurityData.chunkInfo = { part: 1, total: 1, type: 'remaining' };
+            const result = await sendSingleSecurityChunk(splitSecurityData, 'security_remaining');
+            if (!result) return false;
+            chunkCount++;
+          }
+        }
+        
+        await window.electronAPI?.writeLog(`Security data split into ${chunkCount} chunks`);
+        return true;
+      } else {
+        // Send as single chunk if size is acceptable
+        return await sendSingleSecurityChunk(pcSecurityData, 'security_single');
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`PC security data error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Helper function to send a single security chunk
+  const sendSingleSecurityChunk = async (pcSecurityData, chunkId) => {
+    try {
+      const securityChunk = {
+        type: 'pc_check_security',
+        data: {
+          authKey,
+          pcSecurity: pcSecurityData,
+          chunkId
+        }
+      };
+
+      const response = await fetch(`${SERVER_URL}/api/bot/send-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${BOT_API_TOKEN}`
+        },
+        body: JSON.stringify({ data: securityChunk })
+      });
+
+      if (response.ok) {
+        await window.electronAPI?.writeLog(`PC security chunk ${chunkId} sent successfully`);
+        return true;
+      } else {
+        const errorText = await response.text();
+        await window.electronAPI?.writeLog(`PC security chunk ${chunkId} failed: ${response.status} - ${errorText}`);
+        return false;
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`PC security chunk ${chunkId} error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Helper function to check payload size and split if necessary
+  const getPayloadSize = (data) => {
+    return new Blob([JSON.stringify(data)]).size;
+  };
+
+  const splitArrayData = (array, maxChunkSize = 50) => {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += maxChunkSize) {
+      chunks.push(array.slice(i, i + maxChunkSize));
+    }
+    return chunks;
+  };
+
+  // Send suspicious files data separately with automatic splitting
+  const sendSuspiciousFilesData = async (suspiciousFilesData) => {
+    try {
+      // Check if we need to split the data
+      const testChunk = {
+        type: 'pc_check_suspicious',
+        data: {
+          authKey,
+          suspiciousFiles: suspiciousFilesData
+        }
+      };
+
+      const payloadSize = getPayloadSize({ data: testChunk });
+      const maxPayloadSize = 50 * 1024; // 50KB limit (very conservative to ensure chunking works)
+
+      await window.electronAPI?.writeLog(`Suspicious files payload size: ${payloadSize} bytes`);
+
+      if (payloadSize > maxPayloadSize) {
+        await window.electronAPI?.writeLog('Payload too large, splitting suspicious files data...');
+        
+        // Split different arrays within suspicious files
+        const splitData = { ...suspiciousFilesData };
+        
+        // Split large arrays
+        if (suspiciousFilesData.mostSuspicious && suspiciousFilesData.mostSuspicious.length > 20) {
+          const chunks = splitArrayData(suspiciousFilesData.mostSuspicious, 20);
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkData = {
+              ...splitData,
+              mostSuspicious: chunks[i],
+              chunkInfo: { part: i + 1, total: chunks.length, type: 'mostSuspicious' }
+            };
+            
+            const result = await sendSingleSuspiciousChunk(chunkData, `suspicious_most_${i + 1}`);
+            if (!result) return false;
+          }
+        }
+
+        if (suspiciousFilesData.lastOpened && suspiciousFilesData.lastOpened.length > 20) {
+          const chunks = splitArrayData(suspiciousFilesData.lastOpened, 20);
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkData = {
+              ...splitData,
+              lastOpened: chunks[i],
+              mostSuspicious: [], // Clear other arrays to reduce size
+              chunkInfo: { part: i + 1, total: chunks.length, type: 'lastOpened' }
+            };
+            
+            const result = await sendSingleSuspiciousChunk(chunkData, `suspicious_opened_${i + 1}`);
+            if (!result) return false;
+          }
+        }
+
+        if (suspiciousFilesData.lastDownloaded && suspiciousFilesData.lastDownloaded.length > 20) {
+          const chunks = splitArrayData(suspiciousFilesData.lastDownloaded, 20);
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkData = {
+              ...splitData,
+              lastDownloaded: chunks[i],
+              mostSuspicious: [], // Clear other arrays
+              lastOpened: [],
+              chunkInfo: { part: i + 1, total: chunks.length, type: 'lastDownloaded' }
+            };
+            
+            const result = await sendSingleSuspiciousChunk(chunkData, `suspicious_downloaded_${i + 1}`);
+            if (!result) return false;
+          }
+        }
+
+        // Send remaining data (DLLs, possible cheats, etc.)
+        const remainingData = {
+          ...splitData,
+          mostSuspicious: [], // Clear large arrays
+          lastOpened: [],
+          lastDownloaded: [],
+          chunkInfo: { part: 1, total: 1, type: 'remaining' }
+        };
+        
+        return await sendSingleSuspiciousChunk(remainingData, 'suspicious_remaining');
+      } else {
+        // Send as single chunk if size is acceptable
+        return await sendSingleSuspiciousChunk(suspiciousFilesData, 'suspicious_single');
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Suspicious files data error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Helper function to send a single suspicious files chunk
+  const sendSingleSuspiciousChunk = async (suspiciousFilesData, chunkId) => {
+    try {
+      const suspiciousChunk = {
+        type: 'pc_check_suspicious',
+        data: {
+          authKey,
+          suspiciousFiles: suspiciousFilesData,
+          chunkId
+        }
+      };
+
+      const response = await fetch(`${SERVER_URL}/api/bot/send-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${BOT_API_TOKEN}`
+        },
+        body: JSON.stringify({ data: suspiciousChunk })
+      });
+
+      if (response.ok) {
+        await window.electronAPI?.writeLog(`Suspicious files chunk ${chunkId} sent successfully`);
+        return true;
+      } else {
+        const errorText = await response.text();
+        await window.electronAPI?.writeLog(`Suspicious files chunk ${chunkId} failed: ${response.status} - ${errorText}`);
+        return false;
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Suspicious files chunk ${chunkId} error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Helper function to send a single recycle files chunk
+  const sendSingleRecycleChunk = async (recycleData, chunkId) => {
+    try {
+      const recycleChunk = {
+        type: 'pc_check_recycle',
+        data: {
+          authKey,
+          recycleFiles: recycleData
+        }
+      };
+
+      const response = await fetch(`${SERVER_URL}/api/bot/send-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${BOT_API_TOKEN}`
+        },
+        body: JSON.stringify({ data: recycleChunk })
+      });
+
+      if (response.ok) {
+        await window.electronAPI?.writeLog(`Recycle files chunk ${chunkId} sent successfully`);
+        return true;
+      } else {
+        const errorText = await response.text();
+        await window.electronAPI?.writeLog(`Recycle files chunk ${chunkId} failed: ${response.status} - ${errorText}`);
+        return false;
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Recycle files chunk ${chunkId} error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Send recycle files data separately
+  const sendRecycleFilesData = async (recycleFilesData) => {
+    try {
+      const maxPayloadSize = 50 * 1024; // 50KB limit (very conservative to ensure chunking works)
+      
+      // Check payload size first
+      const testChunk = {
+        type: 'pc_check_recycle',
+        data: {
+          authKey,
+          recycleFiles: recycleFilesData
+        }
+      };
+      
+      const payloadSize = getPayloadSize({ data: testChunk });
+      await window.electronAPI?.writeLog(`Recycle files payload size: ${payloadSize} bytes`);
+      
+      if (payloadSize > maxPayloadSize) {
+        await window.electronAPI?.writeLog('Recycle files payload too large, splitting data...');
+        
+        // Split recycle files if there are many
+        if (recycleFilesData.recycleFiles && recycleFilesData.recycleFiles.length > 3) {
+          const recycleChunks = splitArrayData(recycleFilesData.recycleFiles, 3);
+          let chunkCount = 0;
+          
+          for (let i = 0; i < recycleChunks.length; i++) {
+            const chunkData = {
+              ...recycleFilesData,
+              recycleFiles: recycleChunks[i],
+              chunkInfo: { part: i + 1, total: recycleChunks.length, type: 'recycle_files' }
+            };
+            
+            const result = await sendSingleRecycleChunk(chunkData, `recycle_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          
+          await window.electronAPI?.writeLog(`Recycle files data split into ${chunkCount} chunks`);
+          return true;
+        } else {
+          // If still too large but few files, try smaller chunks
+          const recycleChunks = splitArrayData(recycleFilesData.recycleFiles || [], 2);
+          let chunkCount = 0;
+          
+          for (let i = 0; i < recycleChunks.length; i++) {
+            const chunkData = {
+              totalFiles: recycleFilesData.totalFiles,
+              recycleFiles: recycleChunks[i],
+              reportPath: i === 0 ? recycleFilesData.reportPath : null,
+              chunkInfo: { part: i + 1, total: recycleChunks.length, type: 'recycle_files_small' }
+            };
+            
+            const result = await sendSingleRecycleChunk(chunkData, `recycle_small_${i + 1}`);
+            if (!result) return false;
+            chunkCount++;
+          }
+          
+          await window.electronAPI?.writeLog(`Recycle files data split into ${chunkCount} small chunks`);
+          return true;
+        }
+      } else {
+        // Send as single chunk if size is acceptable
+        return await sendSingleRecycleChunk(recycleFilesData, 'recycle_single');
+      }
+    } catch (error) {
+      await window.electronAPI?.writeLog(`Recycle files data error: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Function to create Discord webhook data based on detection results (kept for reference)
   const createWebhookData = async (detectionData, pcSecurityData, suspiciousFilesData, recycleFilesData, computerName, checkedBy) => {
     const embed1 = {
       title: `PC Check completed! (${computerName})`,
@@ -626,6 +1505,35 @@ function App() {
 
     return webhookData;
   };
+
+  // Initialize application on startup
+  useEffect(() => {
+    const initializeApp = async () => {
+      setLoadingText('Starting application...');
+      console.log('Application initialization started');
+      
+      // Verify server connection and version
+      setLoadingText('Verifying server connection...');
+      const serverOk = await verifyServerVersion();
+      
+      if (serverOk) {
+        setLoadingText('Application is ready!');
+        console.log('Application initialization completed successfully');
+        setIsInitializing(false);
+      } else {
+        setLoadingText('Connection error - application will close in 3 seconds');
+        console.log('Application initialization failed - closing in 3 seconds');
+        // Show error and close app after 3 seconds
+        setTimeout(() => {
+          if (window.electronAPI) {
+            window.electronAPI.closeApp();
+          }
+        }, 3000);
+      }
+    };
+
+    initializeApp();
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated && isLoading) {
@@ -1059,12 +1967,12 @@ function App() {
               setTimeout(async () => {
                 currentStep++;
                 if (currentStep >= loadingSteps.length) {
-                  // Send Discord webhook with detection results
+                  // Send data to bot instead of webhook
                   setTimeout(async () => {
                     try {
-                      await window.electronAPI?.writeLog('Preparing Discord webhook...');
+                      await window.electronAPI?.writeLog('Preparing data for bot...');
                       const computerName = await window.electronAPI?.getComputerName() || 'Unknown PC';
-                      const checkedBy = validKeys[authKey];
+                      const checkedBy = userInfo?.metadata?.staffName || 'Unknown Staff';
                       
                       // Ensure suspiciousFilesData has proper structure even if no files found
                       if (!suspiciousFilesData || !suspiciousFilesData.hasOwnProperty('totalFiles')) {
@@ -1088,89 +1996,229 @@ function App() {
                         await window.electronAPI?.writeLog('Using default recycleFilesData - no recycle files found');
                       }
                       
-                      // USB detection removed as requested
-                      
-                      const webhookData = await createWebhookData(detectionData, pcSecurityData, suspiciousFilesData, recycleFilesData, computerName, checkedBy);
-                      await window.electronAPI?.writeLog(`Webhook data prepared: ${JSON.stringify(webhookData, null, 2)}`);
-                      
-                      // First send the webhook with embeds
-                      const response = await fetch('https://discord.com/api/webhooks/1428793584995536998/jsgfl9zHP-PkcMm-XgTCzPsdHCiPC2YxOICj6JAVIA3AJu4LLLTQBsMcMw5syoh96V_H', {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(webhookData)
-                      });
-                      
-                      if (response.ok) {
-                        await window.electronAPI?.writeLog('Webhook sent successfully');
-                        console.log('Webhook sent successfully');
+                      // Collect registry data
+                      await window.electronAPI?.writeLog('Collecting registry data...');
+                      let registryData = null;
+                      try {
+                        const compatibilityAssistant = await window.electronAPI?.dumpCompatibilityAssistantStore();
+                        const appSwitched = await window.electronAPI?.dumpAppSwitched();
+                        const muiCache = await window.electronAPI?.dumpMuiCache();
                         
-                        // Try to upload the Suspicious-files.txt file if it exists
+                        registryData = {
+                          compatibilityAssistant,
+                          appSwitched,
+                          muiCache
+                        };
+                        
+                        await window.electronAPI?.writeLog('Registry data collected successfully');
+                      } catch (error) {
+                        await window.electronAPI?.writeLog(`Registry data collection error: ${error.message}`);
+                        registryData = null;
+                      }
+                      
+                      // Send data to bot
+                      await window.electronAPI?.writeLog('About to call sendDataToBot function...');
+                      const success = await sendDataToBot(detectionData, pcSecurityData, suspiciousFilesData, recycleFilesData, registryData, computerName, checkedBy);
+                      await window.electronAPI?.writeLog(`sendDataToBot returned: ${success}`);
+                      
+                      if (success) {
+                        await window.electronAPI?.writeLog('Data successfully sent to bot');
+                        
+                        // Try to send file data to bot as well
                         try {
                           const fileBuffer = await window.electronAPI?.readFileBuffer('Suspicious-files.txt');
                           if (fileBuffer) {
-                            const formData = new FormData();
-                            const blob = new Blob([fileBuffer], { type: 'text/plain' });
-                            formData.append('files[0]', blob, 'Suspicious-files.txt');
-                            formData.append('content', `📄 **Suspicious Files Report** - ${computerName}`);
+                            const fileData = {
+                              type: 'file_upload',
+                              data: {
+                                fileName: 'Suspicious-files.txt',
+                                fileContent: fileBuffer.toString(),
+                                computerName,
+                                authKey,
+                                fileType: 'suspicious_files'
+                              }
+                            };
                             
-                            const fileResponse = await fetch('https://discord.com/api/webhooks/1428793584995536998/jsgfl9zHP-PkcMm-XgTCzPsdHCiPC2YxOICj6JAVIA3AJu4LLLTQBsMcMw5syoh96V_H', {
+                            const fileResponse = await fetch(`${SERVER_URL}/api/bot/send-file`, {
                               method: 'POST',
-                              body: formData
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${BOT_API_TOKEN}`
+                              },
+                              body: JSON.stringify(fileData)
                             });
                             
                             if (fileResponse.ok) {
-                              await window.electronAPI?.writeLog('Suspicious files report uploaded successfully');
-                              console.log('File uploaded successfully');
-                            } else {
-                              const fileErrorText = await fileResponse.text();
-                              await window.electronAPI?.writeLog(`File upload failed: ${fileResponse.status} - ${fileErrorText}`);
+                              await window.electronAPI?.writeLog('Suspicious files report sent to bot successfully');
                             }
-                          } else {
-                            await window.electronAPI?.writeLog('No Suspicious-files.txt found to upload');
                           }
                         } catch (fileError) {
-                          await window.electronAPI?.writeLog(`File upload error: ${fileError.message}`);
-                          console.log('File upload error:', fileError);
+                          await window.electronAPI?.writeLog(`File send error: ${fileError.message}`);
                         }
 
-                        // Try to upload the Recycle-files.txt file if it exists
+                        // Try to send recycle bin file data to bot
                         try {
                           const recycleFileBuffer = await window.electronAPI?.readFileBuffer('Recycle-files.txt');
                           if (recycleFileBuffer) {
-                            const recycleFormData = new FormData();
-                            const recycleBlob = new Blob([recycleFileBuffer], { type: 'text/plain' });
-                            recycleFormData.append('files[0]', recycleBlob, 'Recycle-files.txt');
-                            recycleFormData.append('content', `🗑️ **Recycle Bin Files Report** - ${computerName}`);
+                            const recycleFileData = {
+                              type: 'file_upload',
+                              data: {
+                                fileName: 'Recycle-files.txt',
+                                fileContent: recycleFileBuffer.toString(),
+                                computerName,
+                                authKey,
+                                fileType: 'recycle_files'
+                              }
+                            };
                             
-                            const recycleFileResponse = await fetch('https://discord.com/api/webhooks/1428793584995536998/jsgfl9zHP-PkcMm-XgTCzPsdHCiPC2YxOICj6JAVIA3AJu4LLLTQBsMcMw5syoh96V_H', {
+                            const recycleFileResponse = await fetch(`${SERVER_URL}/api/bot/send-file`, {
                               method: 'POST',
-                              body: recycleFormData
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${BOT_API_TOKEN}`
+                              },
+                              body: JSON.stringify(recycleFileData)
                             });
                             
                             if (recycleFileResponse.ok) {
-                              await window.electronAPI?.writeLog('Recycle bin files report uploaded successfully');
-                              console.log('Recycle bin file uploaded successfully');
-                            } else {
-                              const recycleFileErrorText = await recycleFileResponse.text();
-                              await window.electronAPI?.writeLog(`Recycle bin file upload failed: ${recycleFileResponse.status} - ${recycleFileErrorText}`);
+                              await window.electronAPI?.writeLog('Recycle bin files report sent to bot successfully');
                             }
-                          } else {
-                            await window.electronAPI?.writeLog('No Recycle-files.txt found to upload');
                           }
                         } catch (recycleFileError) {
-                          await window.electronAPI?.writeLog(`Recycle bin file upload error: ${recycleFileError.message}`);
-                          console.log('Recycle bin file upload error:', recycleFileError);
+                          await window.electronAPI?.writeLog(`Recycle bin file send error: ${recycleFileError.message}`);
+                        }
+
+                        // Try to send registry files to bot
+                        if (registryData) {
+                          // Send compatibility assistant file
+                          if (registryData.compatibilityAssistant) {
+                            try {
+                              // Format array data properly - each item on new line
+                              const compatContent = Array.isArray(registryData.compatibilityAssistant) 
+                                ? registryData.compatibilityAssistant.join('\n')
+                                : registryData.compatibilityAssistant;
+                              
+                              const compatFileData = {
+                                type: 'file_upload',
+                                data: {
+                                  fileName: 'compatibility-assistant.txt',
+                                  fileContent: compatContent,
+                                  computerName,
+                                  authKey,
+                                  fileType: 'compatibility_assistant'
+                                }
+                              };
+                              
+                              const compatFileResponse = await fetch(`${SERVER_URL}/api/bot/send-file`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${BOT_API_TOKEN}`
+                                },
+                                body: JSON.stringify(compatFileData)
+                              });
+                              
+                              if (compatFileResponse.ok) {
+                                await window.electronAPI?.writeLog('Compatibility assistant file sent to bot successfully');
+                              }
+                            } catch (compatFileError) {
+                              await window.electronAPI?.writeLog(`Compatibility assistant file send error: ${compatFileError.message}`);
+                            }
+                          }
+
+                          // Send app switched file
+                          if (registryData.appSwitched) {
+                            try {
+                              // Format array data properly - each item on new line
+                              const appSwitchedContent = Array.isArray(registryData.appSwitched) 
+                                ? registryData.appSwitched.join('\n')
+                                : registryData.appSwitched;
+                              
+                              const appSwitchedFileData = {
+                                type: 'file_upload',
+                                data: {
+                                  fileName: 'app-switched.txt',
+                                  fileContent: appSwitchedContent,
+                                  computerName,
+                                  authKey,
+                                  fileType: 'app_switched'
+                                }
+                              };
+                              
+                              const appSwitchedFileResponse = await fetch(`${SERVER_URL}/api/bot/send-file`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${BOT_API_TOKEN}`
+                                },
+                                body: JSON.stringify(appSwitchedFileData)
+                              });
+                              
+                              if (appSwitchedFileResponse.ok) {
+                                await window.electronAPI?.writeLog('App switched file sent to bot successfully');
+                              }
+                            } catch (appSwitchedFileError) {
+                              await window.electronAPI?.writeLog(`App switched file send error: ${appSwitchedFileError.message}`);
+                            }
+                          }
+
+                          // Send mui cache file
+                          if (registryData.muiCache) {
+                            try {
+                              // Format array data properly - extract name from objects and put each on new line
+                              let muiCacheContent;
+                              if (Array.isArray(registryData.muiCache)) {
+                                muiCacheContent = registryData.muiCache
+                                  .map(item => {
+                                    if (typeof item === 'string') {
+                                      // Remove .FriendlyAppName suffix if present
+                                      return item.replace(/\.FriendlyAppName$/, '');
+                                    }
+                                    if (item && typeof item === 'object' && item.name) {
+                                      // Remove .FriendlyAppName suffix if present
+                                      return item.name.replace(/\.FriendlyAppName$/, '');
+                                    }
+                                    return JSON.stringify(item);
+                                  })
+                                  .join('\n');
+                              } else {
+                                muiCacheContent = registryData.muiCache;
+                              }
+                              
+                              const muiCacheFileData = {
+                                type: 'file_upload',
+                                data: {
+                                  fileName: 'mui-cache.txt',
+                                  fileContent: muiCacheContent,
+                                  computerName,
+                                  authKey,
+                                  fileType: 'mui_cache'
+                                }
+                              };
+                              
+                              const muiCacheFileResponse = await fetch(`${SERVER_URL}/api/bot/send-file`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${BOT_API_TOKEN}`
+                                },
+                                body: JSON.stringify(muiCacheFileData)
+                              });
+                              
+                              if (muiCacheFileResponse.ok) {
+                                await window.electronAPI?.writeLog('MUI cache file sent to bot successfully');
+                              }
+                            } catch (muiCacheFileError) {
+                              await window.electronAPI?.writeLog(`MUI cache file send error: ${muiCacheFileError.message}`);
+                            }
+                          }
                         }
                       } else {
-                        const errorText = await response.text();
-                        await window.electronAPI?.writeLog(`Webhook failed with status ${response.status}: ${errorText}`);
-                        console.log('Webhook failed:', response.status, errorText);
+                        await window.electronAPI?.writeLog('Failed to send data to bot');
                       }
                     } catch (error) {
-                      await window.electronAPI?.writeLog(`Webhook error: ${error.message}`);
-                      console.log('Webhook error:', error);
+                      await window.electronAPI?.writeLog(`Bot communication error: ${error.message}`);
+                      console.log('Bot communication error:', error);
                     }
                     
                     setTimeout(async () => {
@@ -1208,6 +2256,38 @@ function App() {
     }
   };
 
+  // Show initialization screen if still initializing
+  if (isInitializing) {
+    return (
+      <AppContainer>
+        <TopBar>
+          <TopBarTitle>Rusticaland Checker</TopBarTitle>
+          <CloseButton onClick={handleClose}>×</CloseButton>
+        </TopBar>
+        
+        <MainContent>
+          <LoadingContainer>
+            <LoadingSpinner>
+              <LoadingDots>
+                <CenterDot />
+              </LoadingDots>
+            </LoadingSpinner>
+            <LoadingText>{loadingText}</LoadingText>
+            {initError && (
+              <div style={{ color: '#ff4444', marginTop: '20px', textAlign: 'center', fontFamily: 'Rubik, sans-serif' }}>
+                {initError}
+              </div>
+            )}
+          </LoadingContainer>
+        </MainContent>
+        
+        <BottomBar>
+          <VersionText>{appVersion}</VersionText>
+        </BottomBar>
+      </AppContainer>
+    );
+  }
+
   // Show authentication in main content if not authenticated
   if (!isAuthenticated) {
     return (
@@ -1229,11 +2309,12 @@ function App() {
           <AuthButton onClick={handleAuth}>
             Check
           </AuthButton>
+          {authError && <AuthError>{authError}</AuthError>}
         </AuthContainer>
       </MainContent>
         
         <BottomBar>
-          <VersionText>b1.0.0</VersionText>
+          <VersionText>{appVersion}</VersionText>
         </BottomBar>
       </AppContainer>
     );
@@ -1265,10 +2346,40 @@ function App() {
       </MainContent>
       
       <BottomBar>
-        <VersionText>b1.0.0</VersionText>
+        <VersionText>{appVersion}</VersionText>
       </BottomBar>
     </AppContainer>
   );
 }
+
+// New function to send complete files to server (no chunking)
+const sendFilesToServer = async (suspiciousFilesData, recycleFilesData, authKey) => {
+  try {
+    await window.electronAPI?.writeLog('Sending complete files to server...');
+    
+    const response = await fetch(`${SERVER_URL}/api/save-files`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        authKey,
+        suspiciousFiles: suspiciousFilesData,
+        recycleFiles: recycleFilesData
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    await window.electronAPI?.writeLog(`Files saved successfully with ID: ${result.dataId}`);
+    return true;
+  } catch (error) {
+    await window.electronAPI?.writeLog(`Error sending files to server: ${error.message}`);
+    return false;
+  }
+};
 
 export default App;

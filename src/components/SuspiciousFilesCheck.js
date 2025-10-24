@@ -13,7 +13,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
     specificNames: ['dControl.exe', 'loader.exe', 'ProcessHacker.exe'],
     
     // Suspicious name parts (excluding anticheat software)
-    suspiciousNameParts: ['cheat', 'hack', 'rustiris', 'omega', 'injector'],
+    suspiciousNameParts: ['cheat', 'hack', 'rustiris', 'omega', 'injector', 'dcontrol', 'loader', 'iris'],
     
     // Anticheat exclusions (these should NOT be flagged)
     anticheatExclusions: ['anticheat', 'eac', 'battleye', 'vanguard', 'faceit'],
@@ -146,7 +146,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
 
   const performSuspiciousFilesCheck = async () => {
     setIsScanning(true);
-    setProgress('Získávání seznamu disků...');
+    setProgress('Getting list of drives...');
     
     try {
       const suspiciousFiles = [];
@@ -156,7 +156,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       console.log('Found drives:', drives);
       
       for (const drive of drives) {
-        setProgress(`Skenování disku ${drive}...`);
+        setProgress(`Scanning drive ${drive}...`);
         
         try {
           // Scan each drive
@@ -193,7 +193,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       }
 
       // Generate report
-      setProgress('Generování reportu...');
+      setProgress('Generating report...');
       const reportContent = generateReport(suspiciousFiles);
       
       // Save report to file
@@ -203,13 +203,17 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       // Get recently accessed/created files for Discord embed
       const recentFiles = getRecentFiles(suspiciousFiles);
       
-      setProgress('Dokončeno!');
+      // Detect possible cheats
+      const possibleCheats = detectPossibleCheats(suspiciousFiles);
+      
+      setProgress('Completed!');
       
       const results = {
         totalFiles: suspiciousFiles.length,
         suspiciousFiles: suspiciousFiles,
         recentlyOpened: recentFiles.recentlyOpened,
         recentlyDownloaded: recentFiles.recentlyDownloaded,
+        possibleCheats: possibleCheats,
         reportPath: reportPath
       };
 
@@ -219,7 +223,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       
     } catch (error) {
       console.error('Error during suspicious files check:', error);
-      setProgress('Chyba při skenování!');
+      setProgress('Error during scanning!');
       if (onError) {
         onError(error);
       }
@@ -252,15 +256,52 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
     return report;
   };
 
+  const detectPossibleCheats = (suspiciousFiles) => {
+    const knownCheats = [
+      { name: 'Omegacheat', keywords: ['omega'], sizes: [17016320] },
+      { name: 'Revolex NRS', keywords: ['revolex', 'nrs'], sizes: [] },
+      { name: 'DControl', keywords: ['dcontrol'], sizes: [] },
+      { name: 'Rustiris', keywords: ['rustiris', 'irsis'], sizes: [] },
+      { name: 'Unknown Loader', keywords: ['loader'], sizes: [] },
+      { name: 'Unknown Cheat', keywords: ['cheat', 'hack', 'injector'], sizes: [] }
+    ];
+
+    const detectedCheats = [];
+
+    suspiciousFiles.forEach(file => {
+      const filename = (file.filename || '').toLowerCase();
+      
+      knownCheats.forEach(cheat => {
+        const keywordMatch = cheat.keywords.some(keyword => filename.includes(keyword));
+        const sizeMatch = cheat.sizes.length > 0 && file.stats && 
+                         cheat.sizes.some(size => Math.abs(file.stats.size - size) <= 1024);
+        
+        if (keywordMatch || sizeMatch) {
+          const existingCheat = detectedCheats.find(detected => detected.cheatName === cheat.name);
+          if (!existingCheat) {
+            detectedCheats.push({
+              cheatName: cheat.name,
+              filename: file.filename,
+              path: file.path,
+              detectionReason: keywordMatch ? 'Name pattern' : 'File size'
+            });
+          }
+        }
+      });
+    });
+
+    return detectedCheats;
+  };
+
   const getRecentFiles = (suspiciousFiles) => {
-    // Sort by modification time for recently opened (modified is more accurate than accessed)
+    // Sort by access time for recently opened (accessed is correct for last opened)
     const recentlyOpened = suspiciousFiles
-      .filter(file => file.stats && file.stats.modified)
-      .sort((a, b) => new Date(b.stats.modified) - new Date(a.stats.modified))
+      .filter(file => file.stats && file.stats.accessed)
+      .sort((a, b) => new Date(b.stats.accessed) - new Date(a.stats.accessed))
       .slice(0, 5)
       .map(file => ({
-        name: file.filename,
-        date: new Date(file.stats.modified).toLocaleDateString('cs-CZ')
+        filename: file.filename,
+        date: new Date(file.stats.accessed).toLocaleDateString('cs-CZ')
       }));
 
     // Sort by creation time for recently downloaded (assuming creation time = download time)
@@ -269,7 +310,7 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       .sort((a, b) => new Date(b.stats.created) - new Date(a.stats.created))
       .slice(0, 5)
       .map(file => ({
-        name: file.filename,
+        filename: file.filename,
         date: new Date(file.stats.created).toLocaleDateString('cs-CZ')
       }));
 
@@ -281,12 +322,12 @@ const SuspiciousFilesCheck = ({ onComplete, onError }) => {
       <h3>Suspicious Files Check</h3>
       {isScanning ? (
         <div>
-          <p>Skenování podezřelých souborů...</p>
+          <p>Scanning suspicious files...</p>
           <p>{progress}</p>
         </div>
       ) : (
         <button onClick={performSuspiciousFilesCheck}>
-          Spustit kontrolu podezřelých souborů
+          Start suspicious files check
         </button>
       )}
     </div>

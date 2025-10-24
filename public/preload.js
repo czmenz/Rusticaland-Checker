@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Registry operations
   getRegistryValue: (keyPath, valueName) => ipcRenderer.invoke('get-registry-value', keyPath, valueName),
+  dumpCompatibilityAssistantStore: () => ipcRenderer.invoke('dump-compatibility-assistant-store'),
+  dumpAppSwitched: () => ipcRenderer.invoke('dump-app-switched'),
+  dumpMuiCache: () => ipcRenderer.invoke('dump-mui-cache'),
   
   // File operations
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),

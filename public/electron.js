@@ -116,14 +116,19 @@ function createWindow() {
     height: 300,
     minWidth: 600,
     minHeight: 300,
-    frame: false, // Odstraní defaultní title bar
+    frame: false, // Remove default title bar
     resizable: false,
-    icon: path.join(__dirname, 'logo.jpg'), // Přidání ikony pro taskbar
+    maximizable: false, // Disable maximizing window
+    alwaysOnTop: true, // Keep window always on top
+    transparent: true, // Enable transparency for rounded corners
+    backgroundColor: '#00000000', // Transparent background
+    roundedCorners: true,
+    icon: path.join(__dirname, 'logo.jpg'), // Add icon for taskbar
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      devTools: false // Zakáže dev tools v produkci
+      devTools: false // Disable dev tools in production
     }
   });
 
@@ -131,41 +136,46 @@ function createWindow() {
   
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
-    // Odstraněno automatické otevření dev tools
+    // Removed automatic dev tools opening
   } else {
     mainWindow.loadFile(path.join(__dirname, '../build/index.html'));
   }
 
-  // Kontrola admin přístupu při spuštění
+  // Prevent window maximization
+  mainWindow.on('maximize', () => {
+    mainWindow.unmaximize();
+  });
+
+  // Check admin access on startup
   checkAdminAccess();
 }
 
 function checkAdminAccess() {
-  // Kontrola, zda aplikace běží s admin právy
+  // Check if application is running with admin rights
   let isAdmin = false;
   
   try {
     if (process.platform === 'win32') {
       require('child_process').execSync('net session', { encoding: 'utf8', stdio: 'pipe' });
-      isAdmin = true; // Pokud příkaz proběhne bez chyby, máme admin práva
+      isAdmin = true; // If command runs without error, we have admin rights
     } else {
       isAdmin = process.getuid && process.getuid() === 0;
     }
   } catch (error) {
-    // Pokud příkaz selže, nemáme admin práva
+    // If command fails, we don't have admin rights
     isAdmin = false;
   }
 
   if (!isAdmin) {
     dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      title: 'Admin přístup vyžadován',
-      message: 'Tato aplikace vyžaduje spuštění s administrátorskými právy pro správnou funkci.',
+      title: 'Admin access required',
+      message: 'This application requires administrator privileges to function properly.',
       buttons: ['OK']
     });
   }
 
-  // Odeslání stavu admin přístupu do rendereru
+  // Send admin access status to renderer
   mainWindow.webContents.once('did-finish-load', () => {
     mainWindow.webContents.send('admin-status', isAdmin);
   });
@@ -175,9 +185,73 @@ app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    // Self-delete the portable executable before quitting
+    deleteSelfExecutable();
     app.quit();
   }
 });
+
+// Function to delete the current executable (portable version)
+function deleteSelfExecutable() {
+  try {
+    // Get the actual portable executable path (not the electron process path)
+    let execPath = process.execPath;
+    
+    // If running from built version, get the actual .exe file
+    if (execPath.includes('electron.exe') || execPath.includes('node.exe')) {
+      // This is development mode, don't delete anything
+      writeToLog('Development mode detected, skipping self-deletion');
+      return;
+    }
+    
+    // For built version, the execPath should be the actual portable .exe
+    writeToLog(`Attempting to delete portable executable: ${execPath}`);
+    
+    // Start immediate force deletion timer (3 seconds)
+    setTimeout(() => {
+      try {
+        // Create a PowerShell script for silent deletion
+        const psScript = `
+Start-Sleep -Seconds 1
+Remove-Item -Path "${execPath}" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue`;
+        
+        const tempPsPath = path.join(os.tmpdir(), 'cleanup_' + Date.now() + '.ps1');
+        fs.writeFileSync(tempPsPath, psScript);
+        
+        // Execute PowerShell script hidden
+        spawn('powershell.exe', ['-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', tempPsPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        }).unref();
+        
+        writeToLog('Force deletion initiated after 3 seconds');
+      } catch (error) {
+        writeToLog(`Error during force deletion: ${error.message}`);
+      }
+    }, 3000);
+    
+    // Also create immediate deletion attempt
+    const psScript = `
+Remove-Item -Path "${execPath}" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue`;
+    
+    const tempPsPath = path.join(os.tmpdir(), 'cleanup_immediate_' + Date.now() + '.ps1');
+    fs.writeFileSync(tempPsPath, psScript);
+    
+    // Execute PowerShell script hidden
+    spawn('powershell.exe', ['-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', tempPsPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    }).unref();
+    
+    writeToLog('Immediate self-deletion script created and executed');
+  } catch (error) {
+    writeToLog(`Error during self-deletion: ${error.message}`);
+  }
+}
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
@@ -206,6 +280,8 @@ ipcMain.handle('get-admin-status', () => {
 
 // Handler pro zavření aplikace
 ipcMain.handle('close-app', () => {
+  // Self-delete the portable executable before quitting
+  deleteSelfExecutable();
   app.quit();
 });
 
@@ -273,8 +349,9 @@ ipcMain.handle('write-log', async (event, message) => {
 // Handler pro kontrolu služeb
 ipcMain.handle('check-service', async (event, serviceName) => {
   return new Promise((resolve) => {
-    const command = `sc query "${serviceName}"`;
-    const child = spawn('cmd', ['/c', command], { shell: true });
+    // Use PowerShell for more reliable service checking
+    const command = `Get-Service -Name "${serviceName}" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`;
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]);
     
     let output = '';
     let error = '';
@@ -288,14 +365,27 @@ ipcMain.handle('check-service', async (event, serviceName) => {
     });
     
     child.on('close', (code) => {
-      if (code === 0 && output.includes('RUNNING')) {
-        resolve('Running');
-      } else if (code === 0 && output.includes('STOPPED')) {
-        resolve('Stopped');
-      } else if (error.includes('does not exist') || error.includes('specified service does not exist')) {
-        resolve('Not Found');
+      const trimmedOutput = output.trim();
+      const trimmedError = error.trim();
+      writeToLog(`Service ${serviceName} check result: code=${code}, output="${trimmedOutput}", error="${trimmedError}"`);
+      
+      if (code === 0) {
+        if (trimmedOutput === 'Running') {
+          resolve('Running');
+        } else if (trimmedOutput === 'Stopped') {
+          resolve('Stopped');
+        } else if (trimmedOutput === '') {
+          // Empty output means service not found
+          resolve('Not Found');
+        } else {
+          // Unknown status
+          writeToLog(`Unknown service status for ${serviceName}: "${trimmedOutput}"`);
+          resolve('Unknown');
+        }
       } else {
-        resolve('Unknown');
+        // PowerShell error
+        writeToLog(`PowerShell error for service ${serviceName}: code=${code}, error="${trimmedError}"`);
+        resolve('Error');
       }
     });
   });
@@ -304,22 +394,34 @@ ipcMain.handle('check-service', async (event, serviceName) => {
 // Handler pro kontrolu Defender Tamper Protection
 ipcMain.handle('check-defender-tamper-protection', async () => {
   return new Promise((resolve) => {
-    const command = 'Get-MpComputerStatus | Select-Object -ExpandProperty IsTamperProtected';
+    const command = 'Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IsTamperProtected';
     const child = spawn('powershell', ['-Command', command], { shell: true });
     
     let output = '';
+    let error = '';
     
     child.stdout.on('data', (data) => {
       output += data.toString();
     });
     
+    child.stderr.on('data', (data) => {
+      error += data.toString();
+    });
+    
     child.on('close', (code) => {
-      if (output.trim() === 'True') {
-        resolve('Enabled');
-      } else if (output.trim() === 'False') {
-        resolve('Disabled');
+      const trimmedOutput = output.trim();
+      writeToLog(`Tamper Protection check result: code=${code}, output="${trimmedOutput}", error="${error.trim()}"`);
+      
+      if (code === 0 && trimmedOutput) {
+        if (trimmedOutput === 'True') {
+          resolve('Enabled');
+        } else if (trimmedOutput === 'False') {
+          resolve('Disabled');
+        } else {
+          resolve('Unknown');
+        }
       } else {
-        resolve('Unknown');
+        resolve('Error');
       }
     });
   });
@@ -332,12 +434,17 @@ ipcMain.handle('check-easy-anticheat', async () => {
     'C:\\Program Files\\EasyAntiCheat'
   ];
   
+  writeToLog('Checking Easy Anti-Cheat installation...');
+  
   for (const eacPath of eacPaths) {
+    writeToLog(`Checking path: ${eacPath}`);
     if (fs.existsSync(eacPath)) {
+      writeToLog(`Easy Anti-Cheat found at: ${eacPath}`);
       return 'Installed';
     }
   }
   
+  writeToLog('Easy Anti-Cheat not found in any expected location');
   return 'Not Found';
 });
 
@@ -812,4 +919,136 @@ ipcMain.handle('check-file-signature', async (event, filePath) => {
       }
     });
   });
+});
+
+// Registry dump functions
+ipcMain.handle('dump-compatibility-assistant-store', async () => {
+  try {
+    if (process.platform !== 'win32') {
+      throw new Error('Registry access only available on Windows');
+    }
+    
+    const { execSync } = require('child_process');
+    const keyPath = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store';
+    const command = `reg query "${keyPath}"`;
+    
+    try {
+      const output = execSync(command, { encoding: 'utf8' });
+      const lines = output.split('\n');
+      const entries = [];
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine && !trimmedLine.includes('HKEY_') && !trimmedLine.includes('(Default)')) {
+          // Registry output format: "name    type    value"
+          // We need to find the first tab/multiple spaces to separate name from type
+          const match = trimmedLine.match(/^(.+?)\s{2,}(REG_\w+)/);
+          if (match) {
+            const name = match[1].trim();
+            if (name && name !== '') {
+              entries.push(name);
+            }
+          }
+        }
+      }
+      
+      return entries;
+    } catch (regError) {
+      // Registry key might not exist
+      return [];
+    }
+  } catch (error) {
+    console.error('Error dumping Compatibility Assistant Store:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('dump-app-switched', async () => {
+  try {
+    if (process.platform !== 'win32') {
+      throw new Error('Registry access only available on Windows');
+    }
+    
+    const { execSync } = require('child_process');
+    const keyPath = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppSwitched';
+    const command = `reg query "${keyPath}"`;
+    
+    try {
+      const output = execSync(command, { encoding: 'utf8' });
+      const lines = output.split('\n');
+      const entries = [];
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine && !trimmedLine.includes('HKEY_') && !trimmedLine.includes('(Default)')) {
+          // Registry output format: "name    type    value"
+          // We need to find the first tab/multiple spaces to separate name from type
+          const match = trimmedLine.match(/^(.+?)\s{2,}(REG_\w+)/);
+          if (match) {
+            const name = match[1].trim();
+            if (name && name !== '' && !name.startsWith('PID0') && !name.startsWith('*PID0')) {
+              entries.push(name);
+            }
+          }
+        }
+      }
+      
+      return entries;
+    } catch (regError) {
+      // Registry key might not exist
+      return [];
+    }
+  } catch (error) {
+    console.error('Error dumping AppSwitched:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('dump-mui-cache', async () => {
+  try {
+    if (process.platform !== 'win32') {
+      throw new Error('Registry access only available on Windows');
+    }
+    
+    const { execSync } = require('child_process');
+    const keyPath = 'HKEY_CURRENT_USER\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache';
+    const command = `reg query "${keyPath}"`;
+    
+    try {
+      const output = execSync(command, { encoding: 'utf8' });
+      const lines = output.split('\n');
+      const entries = [];
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine && !trimmedLine.includes('HKEY_') && !trimmedLine.includes('(Default)')) {
+          // Registry output format: "name    type    value"
+          // We need to find the first tab/multiple spaces to separate name from type, then type from data
+          const match = trimmedLine.match(/^(.+?)\s{2,}(REG_\w+)\s{2,}(.+)$/);
+          if (match) {
+            const name = match[1].trim();
+            const type = match[2].trim();
+            const data = match[3].trim();
+            
+            // Exclude files with 'nastavené' in data
+            if (name && name !== '' && !data.toLowerCase().includes('nastavené')) {
+              entries.push({
+                name: name,
+                type: type,
+                data: data
+              });
+            }
+          }
+        }
+      }
+      
+      return entries;
+    } catch (regError) {
+      // Registry key might not exist
+      return [];
+    }
+  } catch (error) {
+    console.error('Error dumping MuiCache:', error);
+    return [];
+  }
 });
