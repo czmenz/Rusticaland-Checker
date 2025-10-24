@@ -5,8 +5,8 @@ import PCSecurityCheck from './components/PCSecurityCheck';
 import SuspiciousFilesCheck from './components/SuspiciousFilesCheck';
 
 // Server configuration
-const SERVER_URL = 'http://89.203.249.22:4000';
-const BOT_API_TOKEN = 'MTMxNTEwMDEwMjIxMzM2OTk0Ng.Gbb0oV.cTSIIg9tPtGZ8ZD6N2emcu-aLL0HFHjATCp2I8';
+const SERVER_URL = 'SERVER';
+const BOT_API_TOKEN = 'BOT-TOKEN';
 
 const AppContainer = styled.div`
   height: 100vh;
